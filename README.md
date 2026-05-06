@@ -26,13 +26,13 @@ This directory contains a forward-portable patch that changes KIT to a secure-by
 From your KIT repository root:
 
 ```bash
-git am --3way /home/robert/git/secure-kit/0001-secure-default-core-tools.mbox.patch
+git am --3way ~/git/secure-kit/0001-secure-default-core-tools.mbox.patch
 ```
 
 Or with an explicit repo path:
 
 ```bash
-git -C /home/robert/git/kit am --3way /home/robert/git/secure-kit/0001-secure-default-core-tools.mbox.patch
+git -C ~/git/kit am --3way ~/git/secure-kit/0001-secure-default-core-tools.mbox.patch
 ```
 
 ## If Applying To Newer Versions Fails
@@ -41,7 +41,7 @@ Abort `git am` and use 3-way apply with rejects:
 
 ```bash
 git am --abort
-git apply --3way --reject /home/robert/git/secure-kit/0001-secure-default-core-tools.mbox.patch
+git apply --3way --reject ~/git/secure-kit/0001-secure-default-core-tools.mbox.patch
 ```
 
 Then resolve `*.rej`, run tests, and commit manually.
