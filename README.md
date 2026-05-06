@@ -21,6 +21,10 @@ This directory contains a forward-portable patch that changes KIT to a secure-by
   - `coreTools.filesystem.list`
   - `coreTools.filesystem.allowedPaths`
 
+## What IT Does Not
+
+It doesn't cover subagent, extensions, and MCP servers. They could still run shell commands and access the file system depending on their capabilities.
+
 ## Apply To KIT
 
 From your KIT repository root:
