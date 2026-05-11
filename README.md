@@ -24,9 +24,8 @@ By default, Kit does **not** register any bash or filesystem tools for the agent
 This means the model cannot execute shell commands or read/write files unless you
 explicitly enable those capabilities in your configuration file.
 
-This is a security-first default: a freshly installed Kit instance exposes only
-the `subagent` tool (for spawning child agents). Every other tool capability is
-opt-in.
+This is a security-first default: a freshly installed Kit instance exposes no tools. 
+Every tool capability is opt-in.
 
 ## System prompt
 
