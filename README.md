@@ -61,9 +61,6 @@ This is accurate regardless of which tools are enabled.
 `grep` and `find` share the `search` key because they serve the same purpose
 (exploring the filesystem without modifying it).
 
-Note: reading environment variables and system time are only accessible through
-the `bash` tool (via `env`, `date`, etc.). Disabling `bash` covers those as well.
-
 ## Enabling tools
 
 Add a `coreTools` section to `~/.config/kit/config.yml`:
