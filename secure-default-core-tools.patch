@@ -1,0 +1,199 @@
+diff --git a/internal/agent/agent.go b/internal/agent/agent.go
+index 3955d6e0..2ba54ca0 100644
+--- a/internal/agent/agent.go
++++ b/internal/agent/agent.go
+@@ -268,6 +268,36 @@ type GenerateWithLoopResult struct {
+ 
+ // NewAgent creates a new Agent with core tools and optional MCP tool integration.
+ // Core tools (bash, read, write, edit, grep, find, ls) are always registered.
++// CoreToolsForPolicy returns the set of core tools enabled by the given policy.
++// Every tool is opt-in: a field must be explicitly set to true in the user's
++// config for the corresponding tool to be registered with the agent.
++// This is the single source of truth for policy-driven tool selection.
++func CoreToolsForPolicy(policy config.CoreToolsConfig) []fantasy.AgentTool {
++	var tools []fantasy.AgentTool
++	if policy.Bash {
++		tools = append(tools, core.NewBashTool())
++	}
++	if policy.Read {
++		tools = append(tools, core.NewReadTool())
++	}
++	if policy.Write {
++		tools = append(tools, core.NewWriteTool())
++	}
++	if policy.Edit {
++		tools = append(tools, core.NewEditTool())
++	}
++	if policy.Search {
++		tools = append(tools, core.NewGrepTool(), core.NewFindTool())
++	}
++	if policy.List {
++		tools = append(tools, core.NewLsTool())
++	}
++	if policy.Subagent {
++		tools = append(tools, core.NewSubagentTool())
++	}
++	return tools
++}
++
+ // If MCP servers are configured, their tools are loaded in the background —
+ // the agent returns immediately and is usable with core tools only. The first
+ // LLM call (GenerateWithLoop) automatically waits for MCP tools to finish
+@@ -290,8 +320,13 @@ func NewAgent(ctx context.Context, agentConfig *AgentConfig) (*Agent, error) {
+ 		// Custom tools provided - use them
+ 		coreTools = agentConfig.CoreTools
+ 	} else {
+-		// Default: load all core tools
+-		coreTools = core.AllTools()
++		// Default: use policy-filtered core tools (secure-by-default).
++		// Users opt in through the coreTools section of their config file.
++		var policy config.CoreToolsConfig
++		if agentConfig.MCPConfig != nil {
++			policy = agentConfig.MCPConfig.CoreTools
++		}
++		coreTools = CoreToolsForPolicy(policy)
+ 	}
+ 
+ 	// Build the initial tool list: core tools + extension tools (no MCP yet).
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 33428d41..950b9c5d 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -256,10 +256,24 @@ type LimitConfig struct {
+ 	Output  int `json:"output" yaml:"output"`
+ }
+ 
++// CoreToolsConfig configures which built-in core tools are available to the agent.
++// By default all tools are disabled. Users opt in by setting fields to true in
++// their config file. Only the tools listed here will be registered with the agent.
++type CoreToolsConfig struct {
++	Bash     bool `json:"bash,omitempty" yaml:"bash,omitempty"`
++	Read     bool `json:"read,omitempty" yaml:"read,omitempty"`
++	Write    bool `json:"write,omitempty" yaml:"write,omitempty"`
++	Edit     bool `json:"edit,omitempty" yaml:"edit,omitempty"`
++	Search   bool `json:"search,omitempty" yaml:"search,omitempty"`
++	List     bool `json:"list,omitempty" yaml:"list,omitempty"`
++	Subagent bool `json:"subagent,omitempty" yaml:"subagent,omitempty"`
++}
++
+ // Config represents the complete application configuration including MCP servers,
+ // model settings, UI preferences, and API credentials. It supports both command-line
+ // flags and configuration file settings.
+ type Config struct {
++	CoreTools      CoreToolsConfig            `json:"coreTools,omitempty" yaml:"coreTools,omitempty"`
+ 	MCPServers     map[string]MCPServerConfig `json:"mcpServers" yaml:"mcpServers"`
+ 	Model          string                     `json:"model,omitempty" yaml:"model,omitempty"`
+ 	MaxSteps       int                        `json:"max-steps,omitempty" yaml:"max-steps,omitempty"`
+@@ -497,6 +511,17 @@ mcpServers:
+ # provider-api-key: "your-api-key"         # API key for OpenAI, Anthropic, or Google
+ # provider-url: "https://api.openai.com/v1" # Base URL for OpenAI, Anthropic, or Ollama
+ 
++# Core tool access (all disabled by default for safety).
++# Enable only what the agent needs for your use case.
++# coreTools:
++#   bash: true      # Allow executing shell commands (includes env, date, etc.)
++#   read: true      # Allow reading files
++#   write: true     # Allow writing files
++#   edit: true      # Allow editing files (patch/replace)
++#   search: true    # Allow grep/find operations
++#   list: true      # Allow listing directory contents
++#   subagent: true  # Allow spawning sub-agents for parallel/delegated tasks
++
+ # Custom model definitions (under custom/ provider)
+ # customModels:
+ #   my-local-llama:
+diff --git a/pkg/kit/config.go b/pkg/kit/config.go
+index 7636bb86..3e259dcb 100644
+--- a/pkg/kit/config.go
++++ b/pkg/kit/config.go
+@@ -9,35 +9,6 @@ import (
+ 	"github.com/spf13/viper"
+ )
+ 
+-// defaultSystemPrompt is the built-in system prompt used when no custom
+-// prompt is configured. It describes the available core tools and provides
+-// usage guidelines.
+-//
+-// NOTE: Keep this in sync with the CLI default in cmd/root.go (search for
+-// defaultSystemPrompt or system-prompt flag default). Changes here should
+-// generally be reflected there, and vice versa.
+-const defaultSystemPrompt = `You are an expert coding assistant operating inside kit, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+-
+-Available tools:
+-- read: Read file or directory contents (supports pagination via offset/limit)
+-- write: Create or overwrite files
+-- edit: Make surgical edits to files (find exact text and replace)
+-- bash: Execute bash commands with timeout support
+-- grep: Search file contents using regex patterns (respects .gitignore)
+-- find: Search for files by glob pattern (respects .gitignore)
+-- ls: List directory contents
+-
+-In addition to the tools above, you may have access to other custom tools from MCP servers and extensions.
+-
+-Guidelines:
+-- Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)
+-- Use read to examine files before editing
+-- Use edit for precise changes (old text must match exactly, including whitespace)
+-- Use write only for new files or complete rewrites
+-- When summarizing your actions, output plain text directly - do NOT use cat or bash to display what you did
+-- Be concise in your responses
+-- Show file paths clearly when working with files`
+-
+ // sdkDefaultMaxTokens is the last-resort ceiling applied when the SDK caller
+ // has not configured max-tokens via Options, env, config, or a per-model
+ // default. It matches the CLI's --max-tokens cobra default so SDK and CLI
+@@ -67,7 +38,6 @@ const sdkDefaultMaxTokens = 8192
+ //     left as nil pointers so provider libraries apply their own defaults.
+ func setSDKDefaults() {
+ 	viper.SetDefault("model", "anthropic/claude-sonnet-4-5-20250929")
+-	viper.SetDefault("system-prompt", defaultSystemPrompt)
+ 	viper.SetDefault("stream", true)
+ 	viper.SetDefault("num-gpu-layers", -1)
+ 	viper.SetDefault("main-gpu", 0)
+diff --git a/pkg/kit/kit.go b/pkg/kit/kit.go
+index b42f469f..ddab61d6 100644
+--- a/pkg/kit/kit.go
++++ b/pkg/kit/kit.go
+@@ -1318,9 +1318,9 @@ func New(ctx context.Context, opts *Options) (*Kit, error) {
+ 			}
+ 
+ 			// Track whether the user explicitly configured a custom system
+-			// prompt. When they haven't (basePrompt is the built-in default
+-			// or empty), per-model system prompts can replace it on switch.
+-			userSetSystemPrompt := basePrompt != "" && basePrompt != defaultSystemPrompt
++			// prompt. When they haven't (basePrompt is empty), per-model
++			// system prompts can replace it on model switch.
++			userSetSystemPrompt := basePrompt != ""
+ 			hasCustomSystemPrompt = userSetSystemPrompt
+ 			if hasCustomSystemPrompt {
+ 				systemPromptSource = rawPromptInput
+@@ -1758,8 +1758,8 @@ type SubagentConfig struct {
+ 	// Empty string uses a minimal default prompt.
+ 	SystemPrompt string
+ 
+-	// Tools overrides the tool set. If nil, SubagentTools() is used (all
+-	// core tools except subagent, preventing infinite recursion).
++	// Tools overrides the tool set. If nil, the parent's coreTools policy is
++	// inherited with the subagent tool always stripped to prevent recursion.
+ 	Tools []Tool
+ 
+ 	// NoSession, when true, uses an in-memory ephemeral session. When false
+@@ -1853,10 +1853,16 @@ func (m *Kit) Subagent(ctx context.Context, cfg SubagentConfig) (*SubagentResult
+ 		systemPrompt = "You are a helpful coding assistant. Complete the task efficiently and thoroughly."
+ 	}
+ 
+-	// Default tools: everything except subagent.
++	// Default tools: inherit parent's policy, but always strip the subagent tool
++	// to prevent infinite recursion. When cfg.Tools is set explicitly, use that.
+ 	tools := cfg.Tools
+ 	if tools == nil {
+-		tools = SubagentTools()
++		childPolicy := config.CoreToolsConfig{}
++		if m.mcpConfig != nil {
++			childPolicy = m.mcpConfig.CoreTools
++		}
++		childPolicy.Subagent = false // never allow child agents to spawn further subagents
++		tools = agent.CoreToolsForPolicy(childPolicy)
+ 	}
+ 
+ 	// Create child Kit instance. Pass the parent's loaded MCP config to
