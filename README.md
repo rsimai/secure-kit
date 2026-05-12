@@ -112,9 +112,6 @@ The `coreTools` config block is read in `internal/config/config.go` as
 Only tools whose corresponding field is `true` are registered with the agent.
 A tool that is never registered cannot be invoked by the model.
 
-The `subagent` tool is always registered so that multi-agent workflows remain
-functional regardless of individual tool restrictions.
-
 ## Limitations
 
 The following capabilities are **not** currently covered by `coreTools` and
