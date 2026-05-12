@@ -1,0 +1,227 @@
+diff --git a/internal/agent/agent.go b/internal/agent/agent.go
+index 3955d6e0..xxxxxxxx 100644
+--- a/internal/agent/agent.go
++++ b/internal/agent/agent.go
+@@ -268,6 +268,56 @@ type GenerateWithLoopResult struct {
+
+ // NewAgent creates a new Agent with core tools and optional MCP tool integration.
+ // Core tools (bash, read, write, edit, grep, find, ls) are always registered.
++// FilterTools applies an allowlist/denylist policy to a tool set.
++// - If EnabledTools is nil, no filtering is applied (all tools returned).
++// - If EnabledTools is non-nil (even if empty), only listed tools are included.
++// - DisabledTools are always excluded, even if listed in EnabledTools.
++//
++// This enables secure-by-default configurations: an empty EnabledTools list
++// results in zero tools being registered with the agent.
++func FilterTools(allTools []fantasy.AgentTool, enabledTools, disabledTools []string) []fantasy.AgentTool {
++	// Nil EnabledTools = no filtering (backward compatible default)
++	if enabledTools == nil && disabledTools == nil {
++		return allTools
++	}
++
++	var result []fantasy.AgentTool
++	for _, tool := range allTools {
++		name := extractToolName(tool)
++
++		// If EnabledTools is non-nil, use allowlist mode
++		if enabledTools != nil {
++			found := false
++			for _, enabled := range enabledTools {
++				if name == enabled {
++					found = true
++					break
++				}
++			}
++			if !found {
++				continue
++			}
++		}
++
++		// Always exclude disabled tools
++		if disabledTools != nil {
++			blocked := false
++			for _, disabled := range disabledTools {
++				if name == disabled {
++					blocked = true
++					break
++				}
++			}
++			if blocked {
++				continue
++			}
++		}
++
++		result = append(result, tool)
++	}
++	return result
++}
++
+ // If MCP servers are configured, their tools are loaded in the background —
+ // the agent returns immediately and is usable with core tools only. The first
+ // LLM call (GenerateWithLoop) automatically waits for MCP tools to finish
+@@ -290,8 +340,16 @@ func NewAgent(ctx context.Context, agentConfig *AgentConfig) (*Agent, error) {
+ 		// Custom tools provided - use them
+ 		coreTools = agentConfig.CoreTools
+ 	} else {
+-		// Default: load all core tools
+-		coreTools = core.AllTools()
++		// Default: load all core tools, then apply allowlist/denylist filter.
++		// If no filter is configured (nil slices), all tools are registered.
++		// If EnabledTools is configured (even as empty slice), only those tools
++		// are registered (secure-by-default when empty).
++		allTools := core.AllTools()
++		var enabledTools, disabledTools []string
++		if agentConfig.MCPConfig != nil {
++			enabledTools, disabledTools = agentConfig.MCPConfig.EnabledTools, agentConfig.MCPConfig.DisabledTools
++		}
++		coreTools = FilterTools(allTools, enabledTools, disabledTools)
+ 	}
+
+ 	// Build the initial tool list: core tools + extension tools (no MCP yet).
+diff --git a/internal/agent/tools.go b/internal/agent/tools.go
+new file mode 100644
+index 00000000..xxxxxxxx
+--- /dev/null
++++ b/internal/agent/tools.go
+@@ -0,0 +1,33 @@
++package agent
++
++import (
++	"reflect"
++	"strings"
++
++	"charm.land/fantasy"
++)
++
++// extractToolName derives a tool's identifier from its type name.
++// Examples: BashTool -> "bash", ReadTool -> "read", GrepTool -> "grep"
++//
++// This enables runtime-based tool filtering without hardcoding tool names,
++// making the filter future-proof when new tools are added to kit.
++func extractToolName(tool fantasy.AgentTool) string {
++	t := reflect.TypeOf(tool)
++
++	// Handle pointer types
++	if t.Kind() == reflect.Ptr {
++		t = t.Elem()
++	}
++
++	name := t.Name()
++
++	// Strip "Tool" suffix: BashTool -> Bash
++	if len(name) > 4 && strings.HasSuffix(name, "Tool") {
++		name = name[:len(name)-4]
++	}
++
++	// Convert to lowercase: Bash -> bash
++	name = strings.ToLower(name)
++
++	return name
++}
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 33428d41..xxxxxxxx 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -259,6 +259,13 @@ type LimitConfig struct {
+ // Config represents the complete application configuration including MCP servers,
+ // model settings, UI preferences, and API credentials. It supports both command-line
+ // flags and configuration file settings.
++//
++// Tool security: By default, no core tools are enabled. Users opt in by listing
++// tool names in EnabledTools. This provides secure-by-default behavior where a
++// freshly installed kit instance has no tool access unless explicitly configured.
++// Tools not listed in EnabledTools cannot be invoked by the model, even if they
++// are compiled into the binary. DisabledTools provides an additional deny layer
++// that blocks tools even if listed in EnabledTools.
+ type Config struct {
+ 	MCPServers     map[string]MCPServerConfig `json:"mcpServers" yaml:"mcpServers"`
+ 	Model          string                     `json:"model,omitempty" yaml:"model,omitempty"`
+@@ -292,6 +299,14 @@ type Config struct {
+ 	// Per-model generation parameter overrides. Keys are "provider/model" strings
+ 	// (e.g. "anthropic/claude-sonnet-4-5-20250929", "openai/gpt-4o"). These
+ 	// settings act as model-level defaults — CLI flags and global config values
++
++	// EnabledTools is an allowlist of core tool names that should be available to the agent.
++	// If nil, all core tools are enabled (legacy behavior). If non-nil (even if empty),
++	// only the listed tools are registered. Tool names: bash, read, write, edit, grep, find, ls, subagent.
++	EnabledTools []string `json:"enabled-tools,omitempty" yaml:"enabled-tools,omitempty"`
++
++	// DisabledTools is a denylist of tool names to exclude, even if listed in EnabledTools.
++	DisabledTools []string `json:"disabled-tools,omitempty" yaml:"disabled-tools,omitempty"`
+ 	// take precedence when explicitly set.
+ 	ModelSettings map[string]GenerationParams `json:"modelSettings,omitempty" yaml:"modelSettings,omitempty"`
+ }
+@@ -497,6 +512,35 @@ mcpServers:
+ # provider-api-key: "your-api-key"         # API key for OpenAI, Anthropic, or Google
+ # provider-url: "https://api.openai.com/v1" # Base URL for OpenAI, Anthropic, or Ollama
+
++# Core tool access control (allowlist/denylist)
++#
++# By default (when enabled-tools is not set), all core tools are available.
++# To enable secure-by-default mode, set enabled-tools to an explicit list.
++# Only tools in the list will be available to the agent.
++#
++# Available tool names: bash, read, write, edit, grep, find, ls, subagent
++#
++# Examples:
++#
++# Secure by default - no tools:
++# enabled-tools: []
++#
++# Read-only exploration:
++# enabled-tools:
++#   - read
++#   - grep
++#   - find
++#   - ls
++#
++# Full coding assistant:
++# enabled-tools:
++#   - bash
++#   - read
++#   - write
++#   - edit
++#   - grep
++#   - find
++#   - ls
++#   - subagent
++
+ # Custom model definitions (under custom/ provider)
+ # customModels:
+ #   my-local-llama:
+diff --git a/pkg/kit/kit.go b/pkg/kit/kit.go
+index b42f469f..xxxxxxxx 100644
+--- a/pkg/kit/kit.go
++++ b/pkg/kit/kit.go
+@@ -1758,8 +1758,8 @@ type SubagentConfig struct {
+ 	// Empty string uses a minimal default prompt.
+ 	SystemPrompt string
+
+-	// Tools overrides the tool set. If nil, SubagentTools() is used (all
+-	// core tools except subagent, preventing infinite recursion).
++	// Tools overrides the tool set. If nil, the parent's enabled-tools policy
++	// is inherited, with subagent always disabled to prevent infinite recursion.
+ 	Tools []Tool
+
+ 	// NoSession, when true, uses an in-memory ephemeral session. When false
+@@ -1853,10 +1853,17 @@ func (m *Kit) Subagent(ctx context.Context, cfg SubagentConfig) (*SubagentResult
+ 		systemPrompt = "You are a helpful coding assistant. Complete the task efficiently and thoroughly."
+ 	}
+
+-	// Default tools: everything except subagent.
++	// Default tools: inherit parent's allowlist/denylist policy, but always
++	// exclude the subagent tool to prevent infinite recursion.
+ 	tools := cfg.Tools
+ 	if tools == nil {
+-		tools = SubagentTools()
++		var enabledTools, disabledTools []string
++		if m.mcpConfig != nil {
++			enabledTools = m.mcpConfig.EnabledTools
++			disabledTools = append(m.mcpConfig.DisabledTools, "subagent")
++		} else {
++			disabledTools = []string{"subagent"}
++		}
++		tools = agent.FilterTools(core.AllTools(), enabledTools, disabledTools)
+ 	}
+
+ 	// Create child Kit instance. Pass the parent's loaded MCP config to
