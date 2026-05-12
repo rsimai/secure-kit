@@ -49,13 +49,13 @@ Every tool capability is opt-in via the `enabled-tools` allowlist.
 ### Secure by Default (No Tools)
 
 ```yaml
-# Default when enabled-tools is not set: backward compatible (all tools enabled)
-# To activate secure mode, set enabled-tools explicitly:
+# Default when enabled-tools is not set: ZERO tools (secure by default)
+# You can also explicitly set it to empty:
 
 enabled-tools: []
 ```
 
-Agent has zero tool access. Suitable for:
+**IMPORTANT:** Without configuration, the agent has **zero tool access**. Suitable for:
 - Pure conversational agents
 - Q&A systems
 - Code explanation without modification capability
@@ -167,9 +167,9 @@ This means:
 
 ```go
 func FilterTools(allTools []AgentTool, enabledTools, disabledTools []string) []AgentTool {
-    // nil enabledTools = no filtering (backward compatible)
-    if enabledTools == nil && disabledTools == nil {
-        return allTools
+    // Secure by default: empty enabled list = zero tools
+    if len(enabledTools) == 0 {
+        return []AgentTool{}
     }
     
     // Filter based on allowlist/denylist
@@ -177,7 +177,7 @@ func FilterTools(allTools []AgentTool, enabledTools, disabledTools []string) []A
 }
 ```
 
-When `enabled-tools` is set in config:
+When processing tools:
 1. Start with all core tools from `core.AllTools()`
 2. Extract each tool's name via reflection
 3. Include only if in `enabled-tools` list
@@ -243,28 +243,32 @@ enabled-tools:
 
 ---
 
-## Backward Compatibility
+## Default Behavior
 
-### Existing Users (No Config Change)
+### IMPORTANT: Secure by Default
 
-If `enabled-tools` is not set in config (nil):
+**Without any configuration, the agent has ZERO tools available.**
+
+If `enabled-tools` is not set in config:
 ```yaml
-# No enabled-tools key
+# No enabled-tools key - ZERO tools available
 ```
 
-**Behavior:** All tools are enabled (original kit behavior). This maintains 
-backward compatibility for existing users who don't have the new config fields.
+**Behavior:** No tools are enabled. The agent can only chat, not execute commands
+or access files. This is a **breaking change** from upstream kit, which is the 
+entire point of this security patch.
 
-### New Users (Secure by Default)
+### Enabling Tools
 
-Explicitly set `enabled-tools` to activate filtering:
+Explicitly set `enabled-tools` to grant access:
 ```yaml
 enabled-tools:
   - read
   - grep
 ```
 
-**Behavior:** Only listed tools are available. Empty list = zero tools.
+**Behavior:** Only listed tools are available. This is the **only way** to enable
+tools with this patch applied.
 
 ---
 
@@ -336,7 +340,7 @@ enabled-tools:
 
 ## SDK Usage
 
-### Default (All Tools)
+### Default (No Tools - Secure by Default)
 
 ```go
 import "github.com/mark3labs/kit/pkg/kit"
@@ -344,10 +348,10 @@ import "github.com/mark3labs/kit/pkg/kit"
 k, err := kit.New(ctx, &kit.Options{
     Model: "openai/gpt-4",
 })
-// All tools enabled (backward compatible)
+// ZERO tools enabled by default with this patch
 ```
 
-### Secure by Default (No Tools)
+### Explicitly Enable Tools via Config
 
 Create a config file with `enabled-tools: []`, or:
 

@@ -7,38 +7,37 @@ index 3955d6e0..xxxxxxxx 100644
  // NewAgent creates a new Agent with core tools and optional MCP tool integration.
  // Core tools (bash, read, write, edit, grep, find, ls) are always registered.
 +// FilterTools applies an allowlist/denylist policy to a tool set.
-+// - If EnabledTools is nil, no filtering is applied (all tools returned).
-+// - If EnabledTools is non-nil (even if empty), only listed tools are included.
-+// - DisabledTools are always excluded, even if listed in EnabledTools.
++// - Only tools listed in enabledTools are included.
++// - Tools listed in disabledTools are always excluded, even if in enabledTools.
++// - If enabledTools is nil or empty, zero tools are returned (secure by default).
 +//
-+// This enables secure-by-default configurations: an empty EnabledTools list
-+// results in zero tools being registered with the agent.
++// This enables secure-by-default configurations: without explicit configuration,
++// no tools are registered with the agent.
 +func FilterTools(allTools []fantasy.AgentTool, enabledTools, disabledTools []string) []fantasy.AgentTool {
-+	// Nil EnabledTools = no filtering (backward compatible default)
-+	if enabledTools == nil && disabledTools == nil {
-+		return allTools
++	var result []fantasy.AgentTool
++
++	// Secure by default: if enabledTools is nil or empty, return zero tools
++	if len(enabledTools) == 0 {
++		return result
 +	}
 +
-+	var result []fantasy.AgentTool
 +	for _, tool := range allTools {
 +		name := extractToolName(tool)
 +
-+		// If EnabledTools is non-nil, use allowlist mode
-+		if enabledTools != nil {
-+			found := false
-+			for _, enabled := range enabledTools {
-+				if name == enabled {
-+					found = true
-+					break
-+				}
-+			}
-+			if !found {
-+				continue
++		// Check if tool is in allowlist
++		found := false
++		for _, enabled := range enabledTools {
++			if name == enabled {
++				found = true
++				break
 +			}
 +		}
++		if !found {
++			continue
++		}
 +
-+		// Always exclude disabled tools
-+		if disabledTools != nil {
++		// Check if tool is in denylist
++		if len(disabledTools) > 0 {
 +			blocked := false
 +			for _, disabled := range disabledTools {
 +				if name == disabled {
@@ -65,10 +64,10 @@ index 3955d6e0..xxxxxxxx 100644
  	} else {
 -		// Default: load all core tools
 -		coreTools = core.AllTools()
-+		// Default: load all core tools, then apply allowlist/denylist filter.
-+		// If no filter is configured (nil slices), all tools are registered.
-+		// If EnabledTools is configured (even as empty slice), only those tools
-+		// are registered (secure-by-default when empty).
++		// Default: secure by default. Load all available core tools, then filter
++		// based on the enabled-tools allowlist. If enabled-tools is not configured
++		// or is empty, zero tools are registered (the agent has no tool access).
++		// Users must explicitly list tools in enabled-tools to grant access.
 +		allTools := core.AllTools()
 +		var enabledTools, disabledTools []string
 +		if agentConfig.MCPConfig != nil {
@@ -157,16 +156,17 @@ index 33428d41..xxxxxxxx 100644
 
 +# Core tool access control (allowlist/denylist)
 +#
-+# By default (when enabled-tools is not set), all core tools are available.
-+# To enable secure-by-default mode, set enabled-tools to an explicit list.
-+# Only tools in the list will be available to the agent.
++# IMPORTANT: By default (when enabled-tools is not set), NO tools are available.
++# This is a secure-by-default configuration. You must explicitly list the tools
++# you want to enable.
 +#
 +# Available tool names: bash, read, write, edit, grep, find, ls, subagent
 +#
 +# Examples:
 +#
-+# Secure by default - no tools:
++# Chat-only mode (no tools):
 +# enabled-tools: []
++# OR simply omit the enabled-tools section entirely
 +#
 +# Read-only exploration:
 +# enabled-tools:
